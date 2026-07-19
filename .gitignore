@@ -1,0 +1,40 @@
+node_modules/
+.expo/
+dist/
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+.pnp.*
+
+# macOS
+.DS_Store
+*.xcworkspace
+xcuserdata/
+
+# iOS
+ios/Pods/
+ios/build/
+ios/DerivedData/
+ios/Index/
+ios/EcloChatMobile.xcworkspace/xcuserdata/
+ios/*.xcworkspace/xcuserdata/
+
+# Android
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+*.keystore
+
+# Env
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Coverage
+coverage/
+
+# Crashlytics
+firebase-crashlytics-build.json

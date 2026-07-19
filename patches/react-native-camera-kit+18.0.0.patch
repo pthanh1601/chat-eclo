@@ -1,0 +1,11 @@
+diff --git a/node_modules/react-native-camera-kit/ios/ReactNativeCameraKit/ReactNativeCameraKit-Swift.pre.h b/node_modules/react-native-camera-kit/ios/ReactNativeCameraKit/ReactNativeCameraKit-Swift.pre.h
+index f48ce6b..dc41392 100644
+--- a/node_modules/react-native-camera-kit/ios/ReactNativeCameraKit/ReactNativeCameraKit-Swift.pre.h
++++ b/node_modules/react-native-camera-kit/ios/ReactNativeCameraKit/ReactNativeCameraKit-Swift.pre.h
+@@ -1,5 +1 @@
+-#if CK_USE_FRAMEWORKS
+-#import <ReactNativeCameraKit/ReactNativeCameraKit-Swift.h>
+-#else
+-#import <ReactNativeCameraKit-Swift.h>
+-#endif
++#import "ReactNativeCameraKit-Swift.h"

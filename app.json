@@ -1,0 +1,53 @@
+{
+  "expo": {
+    "name": "ECLO Chat",
+    "slug": "eclochat",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "bundleIdentifier": "chatapp.5hpc.app",
+      "buildNumber": "1",
+      "entitlements": {
+        "aps-environment": "production"
+      },
+      "infoPlist": {
+        "UIBackgroundModes": [
+          "audio",
+          "fetch",
+          "remote-notification",
+          "voip"
+        ],
+        "NSCameraUsageDescription": "Ứng dụng cần sử dụng camera để thực hiện cuộc gọi video.",
+        "NSMicrophoneUsageDescription": "Ứng dụng cần sử dụng micro để truyền tải giọng nói khi gọi điện.",
+        "NSPhotoLibraryUsageDescription": "ECLO Chat cần quyền truy cập thư viện ảnh để cập nhật ảnh đại diện.",
+        "NSPhotoLibraryAddOnlyUsageDescription": "ECLO Chat cần quyền để lưu ảnh vào thiết bị.",
+        "NSFaceIDUsageDescription": "Cho phép ECLO Chat sử dụng Face ID để đăng nhập nhanh chóng và bảo mật.",
+        "NSCalendarsUsageDescription": "Cho phép ECLO Chat truy cập lịch để đồng bộ các sự kiện và cuộc họp."
+      }
+    },
+    "android": {
+      "package": "chatapp.chathpc.app"
+    },
+    "plugins": [
+      "expo-secure-store",
+      "expo-notifications",
+      [
+        "@config-plugins/react-native-webrtc",
+        {
+          "cameraPermission": "Cho phép ứng dụng sử dụng Camera để gọi Video.",
+          "microphonePermission": "Cho phép ứng dụng sử dụng Micro để gọi điện thoại."
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "deploymentTarget": "16.4",
+            "useFrameworks": "static"
+          }
+        }
+      ]
+    ]
+  }
+}

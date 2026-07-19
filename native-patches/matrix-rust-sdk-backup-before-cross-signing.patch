@@ -1,0 +1,189 @@
+diff --git a/bindings/matrix-sdk-ffi/src/encryption.rs b/bindings/matrix-sdk-ffi/src/encryption.rs
+index ee00ef10d..f517e099c 100644
+--- a/bindings/matrix-sdk-ffi/src/encryption.rs
++++ b/bindings/matrix-sdk-ffi/src/encryption.rs
+@@ -452,6 +452,12 @@ impl Encryption {
+         user_id: String,
+         fallback_to_server: bool,
+     ) -> Result<Option<Arc<UserIdentity>>, ClientError> {
++        if fallback_to_server {
++            info!("Refreshing identity from the server.");
++            let identity = self.inner.request_user_identity(user_id.as_str().try_into()?).await?;
++            return Ok(identity.map(|identity| Arc::new(UserIdentity { inner: identity })));
++        }
++
+         match self.inner.get_user_identity(user_id.as_str().try_into()?).await {
+             Ok(Some(identity)) => {
+                 return Ok(Some(Arc::new(UserIdentity { inner: identity })));
+@@ -464,14 +470,7 @@ impl Encryption {
+             }
+         }
+ 
+-        info!("Requesting identity from the server.");
+-
+-        if fallback_to_server {
+-            let identity = self.inner.request_user_identity(user_id.as_str().try_into()?).await?;
+-            Ok(identity.map(|identity| Arc::new(UserIdentity { inner: identity })))
+-        } else {
+-            Ok(None)
+-        }
++        Ok(None)
+     }
+ }
+ 
+diff --git a/bindings/matrix-sdk-ffi/src/session_verification.rs b/bindings/matrix-sdk-ffi/src/session_verification.rs
+index 6e0144acd..fddaffaaa 100644
+--- a/bindings/matrix-sdk-ffi/src/session_verification.rs
++++ b/bindings/matrix-sdk-ffi/src/session_verification.rs
+@@ -5,7 +5,7 @@ use matrix_sdk::{
+     encryption::{
+         identities::UserIdentity,
+         verification::{SasState, SasVerification, VerificationRequest, VerificationRequestState},
+-        Encryption,
++        Encryption, LocalTrust,
+     },
+     ruma::events::key::verification::VerificationMethod,
+     Account,
+@@ -161,8 +161,12 @@ impl SessionVerificationController {
+                 }
+ 
+                 let delegate = self.delegate.clone();
+-                get_runtime_handle()
+-                    .spawn(Self::listen_to_sas_verification_changes(verification, delegate));
++                let encryption = self.encryption.clone();
++                get_runtime_handle().spawn(Self::listen_to_sas_verification_changes(
++                    verification,
++                    encryption,
++                    delegate,
++                ));
+             }
+             _ => {
+                 if let Some(delegate) = &*self.delegate.read().unwrap() {
+@@ -291,6 +295,7 @@ impl SessionVerificationController {
+ 
+         get_runtime_handle().spawn(Self::listen_to_verification_request_changes(
+             verification_request,
++            self.encryption.clone(),
+             self.sas_verification.clone(),
+             self.delegate.clone(),
+         ));
+@@ -300,6 +305,7 @@ impl SessionVerificationController {
+ 
+     async fn listen_to_verification_request_changes(
+         verification_request: VerificationRequest,
++        encryption: Encryption,
+         sas_verification: Arc<RwLock<Option<SasVerification>>>,
+         delegate: Delegate,
+     ) {
+@@ -323,6 +329,7 @@ impl SessionVerificationController {
+                         let delegate = delegate.clone();
+                         get_runtime_handle().spawn(Self::listen_to_sas_verification_changes(
+                             verification,
++                            encryption.clone(),
+                             delegate,
+                         ));
+                     } else if let Some(delegate) = &*delegate.read().unwrap() {
+@@ -344,7 +351,11 @@ impl SessionVerificationController {
+         }
+     }
+ 
+-    async fn listen_to_sas_verification_changes(sas: SasVerification, delegate: Delegate) {
++    async fn listen_to_sas_verification_changes(
++        sas: SasVerification,
++        encryption: Encryption,
++        delegate: Delegate,
++    ) {
+         let mut stream = sas.changes();
+ 
+         while let Some(state) = stream.next().await {
+@@ -377,6 +388,17 @@ impl SessionVerificationController {
+                     }
+                 }
+                 SasState::Done { .. } => {
++                    if sas.is_self_verification() {
++                        match encryption.get_own_device().await {
++                            Ok(Some(device)) => {
++                                if let Err(error) = device.set_local_trust(LocalTrust::Verified).await {
++                                    warn!("Failed to persist local trust after SAS verification: {error}");
++                                }
++                            }
++                            Ok(None) => warn!("Own device missing after SAS verification"),
++                            Err(error) => warn!("Failed to load own device after SAS verification: {error}"),
++                        }
++                    }
+                     if let Some(delegate) = &*delegate.read().unwrap() {
+                         delegate.did_finish()
+                     }
+diff --git a/crates/matrix-sdk-ui/src/timeline/mod.rs b/crates/matrix-sdk-ui/src/timeline/mod.rs
+index 83f2c2c32..1063a6d02 100644
+--- a/crates/matrix-sdk-ui/src/timeline/mod.rs
++++ b/crates/matrix-sdk-ui/src/timeline/mod.rs
+@@ -228,8 +228,14 @@ impl Timeline {
+         &self,
+         session_ids: impl IntoIterator<Item = S>,
+     ) {
++        let session_ids: std::collections::BTreeSet<String> =
++            session_ids.into_iter().map(Into::into).collect();
++        if session_ids.is_empty() {
++            self.retry_decryption_for_all_events().await;
++            return;
++        }
+         self.controller
+-            .retry_event_decryption(Some(session_ids.into_iter().map(Into::into).collect()))
++            .retry_event_decryption(Some(session_ids))
+             .await;
+     }
+ 
+diff --git a/crates/matrix-sdk/src/encryption/mod.rs b/crates/matrix-sdk/src/encryption/mod.rs
+index c4a87d9f2..2a65ec05a 100644
+--- a/crates/matrix-sdk/src/encryption/mod.rs
++++ b/crates/matrix-sdk/src/encryption/mod.rs
+@@ -1922,7 +1922,21 @@ impl Encryption {
+         match self.get_own_device().await {
+             Ok(device) => {
+                 if let Some(device) = device {
+-                    let is_verified = device.is_cross_signed_by_owner();
++                    // Keep the same durable fallback as matrix-js-sdk: a
++                    // successful local SAS verification remains trusted while
++                    // a cross-signing signature is still propagating.
++                    let identity_verified = self
++                        .get_user_identity(device.user_id())
++                        .await
++                        .ok()
++                        .flatten()
++                        .is_some_and(|identity| identity.is_verified());
++                    if identity_verified && !device.is_verified()
++                        && let Err(error) = device.set_local_trust(LocalTrust::Verified).await
++                    {
++                        warn!("Failed to persist own device trust after identity verification: {error}");
++                    }
++                    let is_verified = device.is_verified();
+ 
+                     if is_verified {
+                         self.client.inner.verification_state.set(VerificationState::Verified);
+diff --git a/crates/matrix-sdk/src/encryption/secret_storage/secret_store.rs b/crates/matrix-sdk/src/encryption/secret_storage/secret_store.rs
+index 963ae50ab..9e6da6392 100644
+--- a/crates/matrix-sdk/src/encryption/secret_storage/secret_store.rs
++++ b/crates/matrix-sdk/src/encryption/secret_storage/secret_store.rs
+@@ -397,6 +397,12 @@ impl SecretStore {
+             .record("user_id", display(olm_machine.user_id()))
+             .record("device_id", display(olm_machine.device_id()));
+ 
++        // A usable room-key backup is independent from cross-signing. Import
++        // the backup recovery key first so clients can restore message history
++        // even when an older Secret Storage contains empty/missing
++        // cross-signing account-data events.
++        self.maybe_enable_backups().await?;
++
+         info!("Fetching the private cross-signing keys from the secret store");
+ 
+         // Get all our private cross-signing keys from the secret store.
+@@ -444,8 +450,6 @@ impl SecretStore {
+             }
+         }
+ 
+-        self.maybe_enable_backups().await?;
+-
+         Ok(())
+     }
+ 
