@@ -191,6 +191,9 @@ export class MessageService {
     if (type === 'm.room.encrypted') {
       return 'Tin nhắn chưa thể hiển thị.';
     }
+    if (type === 'im.vector.modular.widgets') {
+      return '📹 Cuộc gọi video nhóm';
+    }
     if (type === 'm.room.pinned_events') {
       return `${context?.senderName || 'Một thành viên'} đã cập nhật tin nhắn ghim`;
     }
@@ -242,7 +245,7 @@ export class MessageService {
     if (type === 'm.room.redaction') {
       return `${context?.senderName || 'Một thành viên'} đã xóa một nội dung`;
     }
-    if (type !== 'm.room.message' && type !== 'm.poll.start' && type !== 'm.poll.response' && type !== 'm.reaction' && type !== 'm.sticker') {
+    if (type !== 'm.room.message' && type !== 'm.poll.start' && type !== 'm.poll.response' && type !== 'm.reaction' && type !== 'm.sticker' && type !== 'im.vector.modular.widgets') {
       return `${context?.senderName || 'Một thành viên'} đã cập nhật nhóm`;
     }
     if (type === 'm.poll.start') {

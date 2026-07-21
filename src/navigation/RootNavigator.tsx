@@ -1,5 +1,5 @@
 import React, {useEffect, useMemo, useState} from 'react';
-import {Alert} from 'react-native';
+import {Alert, DeviceEventEmitter} from 'react-native';
 import {DarkTheme, DefaultTheme, getFocusedRouteNameFromRoute, NavigationContainer} from '@react-navigation/native';
 import {createNativeStackNavigator} from '@react-navigation/native-stack';
 import {createNativeBottomTabNavigator} from '@bottom-tabs/react-navigation';
@@ -337,6 +337,79 @@ function startDirectCall(roomId: string | undefined, mediaType: CallMediaType): 
     Alert.alert('Chưa thể gọi', 'Hãy gửi tin nhắn đầu tiên để tạo hội thoại trước khi gọi.');
     return;
   }
+
+  let actionClient: any = null;
+  try {
+    actionClient = matrixClientService.currentClient;
+  } catch (err) {
+    // Native mode fallback
+  }
+  const room = actionClient?.getRoom(roomId);
+
+  let isGroup = false;
+  const nativeRooms = (nativeMatrixService as any).getCachedRooms();
+  const nativeRoom = nativeRooms.find((r: any) => r.roomId === roomId);
+  if (nativeRoom) {
+    isGroup = !nativeRoom.isDirect;
+  } else if (room) {
+    const jCount = room.getJoinedMemberCount() || 0;
+    const iCount = room.getInvitedMemberCount() || 0;
+    isGroup = (jCount + iCount) > 2;
+  }
+
+  if (isGroup) {
+    const userId = actionClient?.getUserId() || (nativeMatrixService as any).currentUserId || '';
+    const jitsiDomain = "jitsi.5hpc.com";
+    const conferenceID = roomId.replace(/[^a-zA-Z0-9]/g, '').toLowerCase() + Date.now().toString().slice(-4);
+
+    const sendFallbackMessage = async () => {
+      try {
+        const jitsiCallEvent = {
+          id: "jitsi_" + Date.now(),
+          type: mediaType,
+          url: `https://${jitsiDomain}/${conferenceID}`,
+          roomName: conferenceID,
+          domain: jitsiDomain,
+          creator: userId,
+          roomId: roomId,
+          ts: Date.now()
+        };
+        
+        if (actionClient) {
+          await actionClient.sendEvent(roomId, "m.room.message", {
+            msgtype: "m.text",
+            body: mediaType === 'video' ? "📹 Cuộc gọi video nhóm" : "📞 Cuộc gọi thoại nhóm",
+            "org.eclo.jitsi": jitsiCallEvent
+          });
+        } else {
+          const auth = (nativeMatrixService as any).currentAccessToken;
+          const baseUrl = (nativeMatrixService as any).currentBaseUrl;
+          if (auth && baseUrl) {
+            await fetch(`${baseUrl.replace(/\/$/, '')}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${Date.now()}`, {
+              method: 'PUT',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${auth}`
+              },
+              body: JSON.stringify({
+                msgtype: "m.text",
+                body: mediaType === 'video' ? "📹 Cuộc gọi video nhóm" : "📞 Cuộc gọi thoại nhóm",
+                "org.eclo.jitsi": jitsiCallEvent
+              })
+            });
+          }
+        }
+      } catch (err) {
+        console.error("Failed to send fallback message", err);
+      }
+    };
+
+    sendFallbackMessage().then(() => {
+        DeviceEventEmitter.emit('OPEN_JITSI_MODAL', { conferenceId: conferenceID, domain: jitsiDomain, type: mediaType });
+    });
+    return;
+  }
+
   callService.placeCall(roomId, mediaType).catch(error => {
     const message = error instanceof Error ? error.message : 'Không thể thực hiện cuộc gọi.';
     Alert.alert(mediaType === 'video' ? 'Lỗi gọi video' : 'Lỗi gọi thoại', message);

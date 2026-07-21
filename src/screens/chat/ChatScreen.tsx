@@ -1,5 +1,5 @@
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
-import {ActionSheetIOS, ActivityIndicator, Alert, Animated, Easing, FlatList, InteractionManager, Keyboard, Modal, NativeScrollEvent, NativeSyntheticEvent, PermissionsAndroid, Platform, Pressable, StyleSheet, Text, TextInput, Vibration, View, useWindowDimensions, type KeyboardEvent, type TextStyle, type ViewToken} from 'react-native';
+import {ActionSheetIOS, ActivityIndicator, Alert, Animated, Easing, FlatList, InteractionManager, Keyboard, Modal, NativeScrollEvent, NativeSyntheticEvent, PermissionsAndroid, Platform, Pressable, StyleSheet, Text, TextInput, Vibration, View, useWindowDimensions, type KeyboardEvent, type TextStyle, type ViewToken, DeviceEventEmitter, TouchableOpacity} from 'react-native';
 import {useFocusEffect} from '@react-navigation/native';
 import {launchImageLibrary, type Asset} from 'react-native-image-picker';
 import {errorCodes as documentErrorCodes, isErrorWithCode, pick, types as documentTypes, type DocumentPickerResponse} from '@react-native-documents/picker';
@@ -23,6 +23,8 @@ import {MatrixMediaVideo} from '../../components/MatrixMediaVideo';
 import {KlipyPicker} from '../../components/KlipyPicker';
 import type {KlipyItem, KlipyMediaType} from '../../core/media/KlipyService';
 import {saveMatrixAttachment} from '../../core/media/saveMatrixAttachment';
+import { JitsiCallModal } from '../../components/JitsiCallModal';
+import { generateJitsiJWT } from '../../utils/JitsiAuth';
 import {
   ArrowUp,
   BarChart3,
@@ -81,6 +83,13 @@ export function ChatScreen({navigation, route}: Props) {
   const [currentDateLabel, setCurrentDateLabel] = useState('');
   const [keyboardOffset, setKeyboardOffset] = useState(0);
   const [bottomPanelHeight, setBottomPanelHeight] = useState(0);
+
+  const [showJitsiModal, setShowJitsiModal] = useState(false);
+  const [jitsiToken, setJitsiToken] = useState<string>('');
+  const [jitsiRoomId, setJitsiRoomId] = useState<string>('');
+  const [jitsiAudioOnly, setJitsiAudioOnly] = useState<boolean>(false);
+  const [activeJitsiWidget, setActiveJitsiWidget] = useState<any>(null);
+
   const listRef = useRef<FlatList<TimelineListItem>>(null);
   const attachMenuAnim = useRef(new Animated.Value(0)).current;
   const recordingPulse = useRef(new Animated.Value(0)).current;
@@ -121,7 +130,65 @@ export function ChatScreen({navigation, route}: Props) {
   useEffect(() => {
     const latest = items.at(-1);
     setCurrentDateLabel(latest ? formatDateLabel(latest.timestamp) : '');
+
+    const jitsiWidgets = items.filter(i => i.type === 'im.vector.modular.widgets');
+    if (jitsiWidgets.length > 0) {
+      const active = jitsiWidgets.find(w => w.raw?.data?.domain);
+      setActiveJitsiWidget(active || null);
+    } else {
+      setActiveJitsiWidget(null);
+    }
   }, [items]);
+
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener('OPEN_JITSI_MODAL', (data) => {
+      joinJitsiCall({ raw: { data: { conferenceId: data.conferenceId, domain: data.domain, type: data.type } } });
+    });
+    return () => sub.remove();
+  }, []);
+
+  const joinJitsiCall = async (widgetEvent: any) => {
+    try {
+      const data = widgetEvent.raw?.data || widgetEvent.raw?.content?.['org.eclo.jitsi'];
+      if (!data || !data.conferenceId && !data.roomName) return;
+
+      const confId = data.conferenceId || data.roomName;
+      const domain = data.domain || 'jitsi.5hpc.com';
+      const isAudioOnly = data.type === 'audio';
+      const user = client ? client.getUser(ownUserId) : null;
+      const displayName = user?.displayName || (nativeMatrixService as any).currentUserDisplayName || 'User';
+      const avatarUrl = user?.avatarUrl ? client?.mxcUrlToHttp(user.avatarUrl) : (nativeMatrixService as any).currentUserAvatarUrl || '';
+
+      if (usingNative) {
+        const auth = (nativeMatrixService as any).currentAccessToken;
+        const baseUrl = (nativeMatrixService as any).currentBaseUrl;
+        if (auth && baseUrl) {
+          const res = await fetch(`${baseUrl.replace(/\/$/, '')}/_matrix/client/v3/user/${encodeURIComponent(ownUserId)}/openid/request_token`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${auth}`
+            },
+            body: JSON.stringify({})
+          });
+          const openIdToken = await res.json();
+          const jwtToken = generateJitsiJWT(openIdToken, confId, domain, displayName, avatarUrl);
+          setJitsiToken(jwtToken);
+        }
+      } else if (client) {
+        const openIdToken = await client.getOpenIdToken();
+        const jwtToken = generateJitsiJWT(openIdToken, confId, domain, displayName, avatarUrl);
+        setJitsiToken(jwtToken);
+      }
+
+      setJitsiRoomId(confId);
+      setJitsiAudioOnly(isAudioOnly);
+      setShowJitsiModal(true);
+    } catch (e) {
+      console.error("Failed to start Jitsi widget", e);
+      Alert.alert("Lỗi", "Không thể tham gia cuộc gọi Jitsi");
+    }
+  };
 
   useEffect(() => () => {
     const recorder = recorderRef.current;
@@ -1152,6 +1219,12 @@ export function ChatScreen({navigation, route}: Props) {
                 <Pressable
                   delayLongPress={260}
                   onLongPress={() => openMessageActions(message)}
+                  onPress={() => {
+                    const jitsiData = (message.raw?.content as any)?.['org.eclo.jitsi'];
+                    if (jitsiData) {
+                      joinJitsiCall({ raw: { data: { conferenceId: jitsiData.roomName || jitsiData.conferenceId, domain: jitsiData.domain, type: jitsiData.type } } });
+                    }
+                  }}
                   style={[
                     styles.bubble,
                     mediaOnly ? styles.mediaOnlyBubble : null,
@@ -1407,6 +1480,46 @@ export function ChatScreen({navigation, route}: Props) {
           </GlassSurface>
         </View>
         )}
+
+        {/* Jitsi Banner */}
+        {activeJitsiWidget && !showJitsiModal && (
+          <TouchableOpacity
+            style={{
+              position: 'absolute',
+              top: insets.top + 50,
+              left: 20,
+              right: 20,
+              backgroundColor: '#10b981',
+              borderRadius: 12,
+              padding: 12,
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'center',
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 2 },
+              shadowOpacity: 0.25,
+              shadowRadius: 3.84,
+              elevation: 5,
+              zIndex: 100,
+            }}
+            onPress={() => joinJitsiCall(activeJitsiWidget)}
+          >
+            <Video color="#fff" size={20} style={{ marginRight: 8 }} />
+            <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 16 }}>Tham gia cuộc gọi video</Text>
+          </TouchableOpacity>
+        )}
+
+        {/* Jitsi Modal */}
+        <JitsiCallModal
+          visible={showJitsiModal}
+          roomName={jitsiRoomId}
+          token={jitsiToken}
+          audioOnly={jitsiAudioOnly}
+          onClose={() => setShowJitsiModal(false)}
+          serverURL={'https://jitsi.5hpc.com'}
+          displayName={client?.getUser(ownUserId)?.displayName || (nativeMatrixService as any).currentUserDisplayName || 'User'}
+          avatarUrl={client?.mxcUrlToHttp(client?.getUser(ownUserId)?.avatarUrl || '') || (nativeMatrixService as any).currentUserAvatarUrl || ''}
+        />
       </Animated.View>
     </View>
   );
