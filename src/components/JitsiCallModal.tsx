@@ -1,6 +1,7 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { StyleSheet, View, TouchableOpacity, Text, SafeAreaView, Animated, PanResponder, Dimensions, Modal } from 'react-native';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { StyleSheet, View, TouchableOpacity, Text, SafeAreaView, Animated, PanResponder, Dimensions } from 'react-native';
 import { WebView } from 'react-native-webview';
+import { Minimize2, Maximize2, X } from 'lucide-react-native';
 
 interface JitsiCallModalProps {
   visible: boolean;
@@ -11,11 +12,12 @@ interface JitsiCallModalProps {
   displayName?: string;
   avatarUrl?: string;
   onClose: () => void;
+  onMinimizeToggle?: (minimized: boolean) => void;
 }
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
-const PIP_WIDTH = 120;
-const PIP_HEIGHT = 160;
+const PIP_WIDTH = 150;
+const PIP_HEIGHT = 220;
 
 export function JitsiCallModal({
   visible,
@@ -26,21 +28,29 @@ export function JitsiCallModal({
   displayName,
   avatarUrl,
   onClose,
+  onMinimizeToggle,
 }: JitsiCallModalProps) {
   const [isMinimized, setIsMinimized] = useState(false);
   
   // Animation value for position when minimized
   const pan = useRef(new Animated.ValueXY({ x: SCREEN_WIDTH - PIP_WIDTH - 20, y: SCREEN_HEIGHT - PIP_HEIGHT - 100 })).current;
+  const _dummy = useRef(null); // Keeps the hook order identical to the cached version in Expo Go
 
   // Reset state when visibility changes
   useEffect(() => {
     if (visible) {
       setIsMinimized(false);
+      onMinimizeToggle?.(false);
     }
   }, [visible]);
 
-  const panResponder = useRef(
+  useEffect(() => {
+    onMinimizeToggle?.(isMinimized);
+  }, [isMinimized]);
+
+  const panResponder = React.useMemo(() => 
     PanResponder.create({
+      onStartShouldSetPanResponder: () => isMinimized,
       onMoveShouldSetPanResponder: () => isMinimized,
       onPanResponderGrant: () => {
         pan.setOffset({
@@ -64,8 +74,9 @@ export function JitsiCallModal({
           setIsMinimized(false);
         }
       }
-    })
-  ).current;
+    }),
+    [isMinimized, pan]
+  );
 
   if (!visible) return null;
 
@@ -90,93 +101,132 @@ export function JitsiCallModal({
   
   // Disable Deep Linking prompt to directly join on web
   hashParams.append('config.disableDeepLinking', 'true');
+  
+  // Hide Jitsi watermark logos via modern config overrides
+  const emptySvg = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E";
+  hashParams.append('config.customLogoUrl', `"${emptySvg}"`);
+  hashParams.append('config.watermarkLogoUrl', `"${emptySvg}"`);
+  
+  // Legacy interface configs
+  hashParams.append('interfaceConfig.SHOW_JITSI_WATERMARK', 'false');
+  hashParams.append('interfaceConfig.SHOW_WATERMARK_FOR_GUESTS', 'false');
+  hashParams.append('interfaceConfig.SHOW_BRAND_WATERMARK', 'false');
+  hashParams.append('interfaceConfig.DEFAULT_LOGO_URL', '""');
+  hashParams.append('interfaceConfig.DEFAULT_WELCOME_PAGE_LOGO_URL', '""');
 
   if (Array.from(hashParams.keys()).length > 0) {
     const hashString = decodeURIComponent(hashParams.toString()).replace(/=/g, '=');
     url += `#${hashString}`;
   }
 
-  return (
-    <Modal visible={visible} animationType={isMinimized ? "none" : "slide"} transparent={isMinimized}>
-      <View style={isMinimized ? styles.pipModalWrapper : styles.fullModalWrapper} pointerEvents={isMinimized ? "box-none" : "auto"}>
-        <Animated.View
-          {...panResponder.panHandlers}
-          style={[
-            isMinimized ? {
-              position: 'absolute',
-              width: PIP_WIDTH,
-              height: PIP_HEIGHT,
-              transform: [{ translateX: pan.x }, { translateY: pan.y }],
-              borderRadius: 12,
-              overflow: 'hidden',
-              elevation: 5,
-              shadowColor: '#000',
-              shadowOffset: { width: 0, height: 2 },
-              shadowOpacity: 0.3,
-              shadowRadius: 4,
-              zIndex: 9999,
-              backgroundColor: '#000',
-            } : styles.fullScreen
-          ]}
-        >
-          <SafeAreaView style={{ flex: 1, backgroundColor: '#000' }}>
-            {!isMinimized && (
-              <View style={styles.header}>
-                <TouchableOpacity onPress={() => setIsMinimized(true)} style={styles.minimizeBtn}>
-                  <Text style={styles.minimizeText}>Thu nhỏ</Text>
-                </TouchableOpacity>
-                
-                <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
-                  <Text style={styles.closeText}>Kết thúc</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-            
-            {isMinimized && (
-              <TouchableOpacity 
-                style={styles.pipCloseBtn} 
-                onPress={(e) => {
-                  e.stopPropagation();
-                  onClose();
-                }}
-              >
-                <Text style={{color: 'white', fontWeight: 'bold'}}>✕</Text>
-              </TouchableOpacity>
-            )}
+  // Handle Jitsi Hangup
+  const handleNavigationStateChange = (navState: any) => {
+    // When a user clicks the red hang up button in Jitsi, 
+    // Jitsi typically redirects out of the room to a rating page or root domain.
+    if (!navState.url.includes(roomName)) {
+      onClose();
+    }
+  };
 
-            <WebView
-              source={{ uri: url }}
-              style={{ flex: 1, backgroundColor: '#000' }}
-              allowsInlineMediaPlayback={true}
-              mediaPlaybackRequiresUserAction={false}
-              javaScriptEnabled={true}
-              domStorageEnabled={true}
-              mediaCapturePermissionGrantType="grantIfSameHostElsePrompt"
-            />
-            
-            {/* Transparent overlay to capture touches when minimized */}
-            {isMinimized && (
-              <View style={StyleSheet.absoluteFillObject} pointerEvents="box-only" />
-            )}
-          </SafeAreaView>
-        </Animated.View>
-      </View>
-    </Modal>
+  // Force hide logos using CSS injection with fuzzy matching for Jitsi's dynamic classes
+  const injectedJS = `
+    (function() {
+      var style = document.createElement('style');
+      style.innerHTML = 'a[class*="watermark"], div[class*="watermark"], [class*="watermark"], [class*="logo"], .watermark, .leftwatermark, .rightwatermark, #defaultWatermark, .watermark-link, .header-logo, .prejoin-header .logo, .jitsi-logo { display: none !important; opacity: 0 !important; visibility: hidden !important; pointer-events: none !important; z-index: -9999 !important; }';
+      document.head.appendChild(style);
+      
+      // Secondary cleanup loop just in case
+      setInterval(function() {
+        document.querySelectorAll('a[href*="jitsi.org"], img[src*="logo"], [class*="watermark"]').forEach(el => el.style.display = 'none');
+      }, 1000);
+    })();
+    true;
+  `;
+
+  return (
+    <Animated.View
+      {...panResponder.panHandlers}
+      style={[
+        isMinimized ? {
+          position: 'absolute',
+          width: PIP_WIDTH,
+          height: PIP_HEIGHT,
+          transform: [{ translateX: pan.x }, { translateY: pan.y }],
+          borderRadius: 12,
+          overflow: 'hidden',
+          elevation: 5,
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 2 },
+          shadowOpacity: 0.3,
+          shadowRadius: 4,
+          zIndex: 99999,
+          backgroundColor: '#000',
+        } : {
+          position: 'absolute',
+          width: SCREEN_WIDTH,
+          height: SCREEN_HEIGHT,
+          top: 0,
+          left: 0,
+          zIndex: 99999,
+          backgroundColor: '#000',
+        }
+      ]}
+    >
+      <SafeAreaView style={{ flex: 1, backgroundColor: '#000' }}>
+        {!isMinimized && (
+          <View style={[styles.header, { justifyContent: 'flex-start' }]}>
+            <TouchableOpacity onPress={() => setIsMinimized(true)} style={styles.minimizeBtn}>
+              <Minimize2 size={24} color="#fff" />
+            </TouchableOpacity>
+          </View>
+        )}
+        
+        {isMinimized && (
+          <View style={{flexDirection: 'row', position: 'absolute', top: 5, right: 5, zIndex: 100, gap: 5}}>
+            <TouchableOpacity 
+              style={[styles.pipCloseBtn, {position: 'relative', top: 0, right: 0}]} 
+              onPress={(e) => {
+                e.stopPropagation();
+                setIsMinimized(false);
+              }}
+            >
+              <Maximize2 size={14} color="#fff" />
+            </TouchableOpacity>
+            <TouchableOpacity 
+              style={[styles.pipCloseBtn, {position: 'relative', top: 0, right: 0, backgroundColor: '#d32f2f'}]} 
+              onPress={(e) => {
+                e.stopPropagation();
+                onClose();
+              }}
+            >
+              <X size={14} color="#fff" />
+            </TouchableOpacity>
+          </View>
+        )}
+
+        <View style={{flex: 1}}>
+          <WebView
+            source={{ uri: url }}
+            style={{ flex: 1, backgroundColor: '#000' }}
+            allowsInlineMediaPlayback={true}
+            mediaPlaybackRequiresUserAction={false}
+            javaScriptEnabled={true}
+            domStorageEnabled={true}
+            mediaCapturePermissionGrantType="grantIfSameHostElsePrompt"
+            onNavigationStateChange={handleNavigationStateChange}
+            injectedJavaScript={injectedJS}
+          />
+          {/* Overlay to block WebView from eating drag touches */}
+          {isMinimized && (
+            <View style={[StyleSheet.absoluteFillObject, {backgroundColor: 'rgba(255,255,255,0.01)'}]} pointerEvents="auto" />
+          )}
+        </View>
+      </SafeAreaView>
+    </Animated.View>
   );
 }
 
 const styles = StyleSheet.create({
-  fullModalWrapper: {
-    flex: 1,
-    backgroundColor: '#000',
-  },
-  pipModalWrapper: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  fullScreen: {
-    flex: 1,
-    backgroundColor: '#000',
-  },
   header: {
     height: 50,
     flexDirection: 'row',

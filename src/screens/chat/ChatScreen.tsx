@@ -88,7 +88,14 @@ export function ChatScreen({navigation, route}: Props) {
   const [jitsiToken, setJitsiToken] = useState<string>('');
   const [jitsiRoomId, setJitsiRoomId] = useState<string>('');
   const [jitsiAudioOnly, setJitsiAudioOnly] = useState<boolean>(false);
+  const [isJitsiMinimized, setIsJitsiMinimized] = useState(false);
   const [activeJitsiWidget, setActiveJitsiWidget] = useState<any>(null);
+
+  useEffect(() => {
+    navigation.setOptions({
+      headerShown: !(showJitsiModal && !isJitsiMinimized)
+    });
+  }, [navigation, showJitsiModal, isJitsiMinimized]);
 
   const listRef = useRef<FlatList<TimelineListItem>>(null);
   const attachMenuAnim = useRef(new Animated.Value(0)).current;
@@ -1509,18 +1516,20 @@ export function ChatScreen({navigation, route}: Props) {
           </TouchableOpacity>
         )}
 
-        {/* Jitsi Modal */}
-        <JitsiCallModal
-          visible={showJitsiModal}
-          roomName={jitsiRoomId}
-          token={jitsiToken}
-          audioOnly={jitsiAudioOnly}
-          onClose={() => setShowJitsiModal(false)}
-          serverURL={'https://jitsi.5hpc.com'}
-          displayName={client?.getUser(ownUserId)?.displayName || (nativeMatrixService as any).currentUserDisplayName || 'User'}
-          avatarUrl={client?.mxcUrlToHttp(client?.getUser(ownUserId)?.avatarUrl || '') || (nativeMatrixService as any).currentUserAvatarUrl || ''}
-        />
       </Animated.View>
+
+      {/* Jitsi Modal */}
+      <JitsiCallModal
+        visible={showJitsiModal}
+        roomName={jitsiRoomId}
+        token={jitsiToken}
+        audioOnly={jitsiAudioOnly}
+        onClose={() => setShowJitsiModal(false)}
+        onMinimizeToggle={setIsJitsiMinimized}
+        serverURL={'https://jitsi.5hpc.com'}
+        displayName={client?.getUser(ownUserId)?.displayName || (nativeMatrixService as any).currentUserDisplayName || 'User'}
+        avatarUrl={client?.mxcUrlToHttp(client?.getUser(ownUserId)?.avatarUrl || '') || (nativeMatrixService as any).currentUserAvatarUrl || ''}
+      />
     </View>
   );
 }
