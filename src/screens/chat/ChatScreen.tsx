@@ -39,6 +39,7 @@ import {
   Trash2,
   Type,
   Video,
+  PhoneOff,
 } from 'lucide-react-native';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Chat'>;
@@ -69,6 +70,8 @@ export function ChatScreen({navigation, route}: Props) {
   const [replyTo, setReplyTo] = useState<TimelineItem | null>(null);
   const [pinnedIds, setPinnedIds] = useState<Set<string>>(new Set());
   const [focusedMessage, setFocusedMessage] = useState<TimelineItem | null>(null);
+  const [focusedJitsiEnded, setFocusedJitsiEnded] = useState(false);
+  const [focusedJitsiDuration, setFocusedJitsiDuration] = useState<string | undefined>(undefined);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [showExpressionMenu, setShowExpressionMenu] = useState(false);
@@ -754,11 +757,13 @@ export function ChatScreen({navigation, route}: Props) {
     }
   }
 
-  function openMessageActions(message: TimelineItem) {
+  function openMessageActions(message: TimelineItem, isJitsiCallEnded?: boolean, callDurationText?: string) {
     if (Platform.OS !== 'ios') {
       Vibration.vibrate(6);
     }
     setFocusedMessage(message);
+    setFocusedJitsiEnded(isJitsiCallEnded ?? false);
+    setFocusedJitsiDuration(callDurationText);
   }
 
   function showReactionDetails(message: TimelineItem) {
@@ -1179,6 +1184,9 @@ export function ChatScreen({navigation, route}: Props) {
           }
           const message = item.message;
           if (message.messageKind === 'system') {
+            if (message.type === 'm.call.hangup' || message.type === 'org.eclo.jitsi.call_end' || message.type === 'im.vector.modular.widgets') {
+              return null;
+            }
             return (
               <View style={styles.systemRow}>
                 <GlassSurface effect="clear" style={[styles.systemPill, {shadowColor: colors.shadow}]}>
@@ -1201,7 +1209,60 @@ export function ChatScreen({navigation, route}: Props) {
           const showTimestamp = !groupedWithNext;
           const replyMessage = message.replyTo ? itemById.get(message.replyTo) : undefined;
           const highlighted = highlightedMessageId === message.id;
-          const mediaOnly = isFramelessMedia(message) || mediaGroup.length > 1;
+          
+          let isJitsiCallEnded = false;
+          let jitsiData = (message.raw as any)?.['org.eclo.jitsi'];
+          const bodyIncludesUrl = message.body?.includes('jitsi.5hpc.com/');
+          if (!jitsiData && bodyIncludesUrl) {
+            const match = message.body?.match(/jitsi\.5hpc\.com\/([a-zA-Z0-9_-]+)/);
+            if (match) {
+              jitsiData = {
+                conferenceId: match[1],
+                domain: 'jitsi.5hpc.com',
+                type: message.body?.includes('video') ? 'video' : 'audio'
+              };
+            }
+          }
+          
+          const isEndCallMessage = Boolean((message.raw as any)?.['org.eclo.jitsi_end']) || message.body?.includes('đã kết thúc');
+          const isJitsiCall = Boolean(jitsiData) || message.body?.includes('Cuộc gọi video nhóm') || message.body?.includes('Cuộc gọi thoại nhóm');
+          
+          let callDurationText = '';
+          if (isJitsiCall) {
+            const confId = jitsiData?.roomName || jitsiData?.conferenceId;
+            if (isEndCallMessage) {
+              isJitsiCallEnded = true;
+              const startMsg = timelineData.find(m => m.kind === 'message' && 
+                m.message.timestamp < message.timestamp && 
+                ((m.message.raw as any)?.['org.eclo.jitsi']?.conferenceId === confId || (confId && m.message.body?.includes(`jitsi.5hpc.com/${confId}`))));
+              if (startMsg && startMsg.kind === 'message') {
+                const diffMs = message.timestamp - startMsg.message.timestamp;
+                const minutes = Math.floor(diffMs / 60000);
+                const seconds = Math.floor((diffMs % 60000) / 1000);
+                callDurationText = minutes > 0 ? `${minutes} phút ${seconds} giây` : `${seconds} giây`;
+              }
+            } else {
+              const endMsg = timelineData.find(m => m.kind === 'message' && (
+                (confId && (m.message.raw as any)?.['org.eclo.jitsi_end']?.conferenceId === confId) ||
+                (m.message.type === 'im.vector.modular.widgets' && m.message.timestamp > message.timestamp && Object.keys(m.message.raw || {}).length === 0) ||
+                (m.message.type === 'm.call.hangup' && m.message.timestamp > message.timestamp) ||
+                (m.message.timestamp > message.timestamp && m.message.body?.includes('đã kết thúc') && (m.message.body?.includes('Cuộc gọi thoại nhóm') || m.message.body?.includes('Cuộc gọi video nhóm') || m.message.body?.includes('Cuộc gọi đã kết thúc')))
+              ));
+              if (endMsg && endMsg.kind === 'message') {
+                isJitsiCallEnded = true;
+                const diffMs = endMsg.message.timestamp - message.timestamp;
+                const minutes = Math.floor(diffMs / 60000);
+                const seconds = Math.floor((diffMs % 60000) / 1000);
+                callDurationText = minutes > 0 ? `${minutes} phút ${seconds} giây` : `${seconds} giây`;
+              }
+            }
+          }
+          
+          if (isEndCallMessage) {
+            return null;
+          }
+          
+          const mediaOnly = isFramelessMedia(message) || mediaGroup.length > 1 || isJitsiCall;
           return (
             <View
               style={[
@@ -1225,11 +1286,18 @@ export function ChatScreen({navigation, route}: Props) {
                 {showSender ? <Text style={[styles.senderOutside, themedText(colors, 12, 16), {color: colors.tertiaryText}]}>{message.senderName || message.sender}</Text> : null}
                 <Pressable
                   delayLongPress={260}
-                  onLongPress={() => openMessageActions(message)}
+                  onLongPress={() => openMessageActions(message, isJitsiCallEnded, callDurationText)}
                   onPress={() => {
-                    const jitsiData = (message.raw?.content as any)?.['org.eclo.jitsi'];
-                    if (jitsiData) {
-                      joinJitsiCall({ raw: { data: { conferenceId: jitsiData.roomName || jitsiData.conferenceId, domain: jitsiData.domain, type: jitsiData.type } } });
+                    let jitsiDataPress = (message.raw as any)?.['org.eclo.jitsi'];
+                    const bodyIncludesUrl = message.body?.includes('jitsi.5hpc.com/');
+                    if (!jitsiDataPress && bodyIncludesUrl) {
+                      const match = message.body?.match(/jitsi\.5hpc\.com\/([a-zA-Z0-9_-]+)/);
+                      if (match) {
+                        jitsiDataPress = { conferenceId: match[1], domain: 'jitsi.5hpc.com', type: message.body?.includes('video') ? 'video' : 'audio' };
+                      }
+                    }
+                    if (jitsiDataPress && !isJitsiCallEnded) {
+                      joinJitsiCall({ raw: { data: { conferenceId: jitsiDataPress.roomName || jitsiDataPress.conferenceId, domain: jitsiDataPress.domain, type: jitsiDataPress.type } } });
                     }
                   }}
                   style={[
@@ -1260,6 +1328,8 @@ export function ChatScreen({navigation, route}: Props) {
                     onOpenMedia={openMediaViewer}
                     onDownloadFile={downloadAttachment}
                     onVote={votePoll}
+                    isJitsiCallEnded={isJitsiCallEnded}
+                    callDurationText={callDurationText}
                   />
                   {showTimestamp ? (
                     <Text style={[
@@ -1288,6 +1358,8 @@ export function ChatScreen({navigation, route}: Props) {
       <MessageActionOverlay
         colors={colors}
         message={focusedMessage}
+        isJitsiCallEnded={focusedJitsiEnded}
+        callDurationText={focusedJitsiDuration}
         ownUserId={ownUserId}
         pinned={focusedMessage ? pinnedIds.has(focusedMessage.id) : false}
         onClose={() => setFocusedMessage(null)}
@@ -1488,33 +1560,6 @@ export function ChatScreen({navigation, route}: Props) {
         </View>
         )}
 
-        {/* Jitsi Banner */}
-        {activeJitsiWidget && !showJitsiModal && (
-          <TouchableOpacity
-            style={{
-              position: 'absolute',
-              top: insets.top + 50,
-              left: 20,
-              right: 20,
-              backgroundColor: '#10b981',
-              borderRadius: 12,
-              padding: 12,
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'center',
-              shadowColor: '#000',
-              shadowOffset: { width: 0, height: 2 },
-              shadowOpacity: 0.25,
-              shadowRadius: 3.84,
-              elevation: 5,
-              zIndex: 100,
-            }}
-            onPress={() => joinJitsiCall(activeJitsiWidget)}
-          >
-            <Video color="#fff" size={20} style={{ marginRight: 8 }} />
-            <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 16 }}>Tham gia cuộc gọi video</Text>
-          </TouchableOpacity>
-        )}
 
       </Animated.View>
 
@@ -1529,6 +1574,29 @@ export function ChatScreen({navigation, route}: Props) {
         serverURL={'https://jitsi.5hpc.com'}
         displayName={client?.getUser(ownUserId)?.displayName || (nativeMatrixService as any).currentUserDisplayName || 'User'}
         avatarUrl={client?.mxcUrlToHttp(client?.getUser(ownUserId)?.avatarUrl || '') || (nativeMatrixService as any).currentUserAvatarUrl || ''}
+        onEndCall={async () => {
+          try {
+            const auth = (nativeMatrixService as any).currentAccessToken;
+            const baseUrl = (nativeMatrixService as any).currentBaseUrl;
+            if (auth && baseUrl) {
+              await fetch(`${baseUrl.replace(/\/$/, '')}/_matrix/client/v3/rooms/${encodeURIComponent(activeRoomId)}/state/im.vector.modular.widgets/jitsi`, {
+                method: 'PUT',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${auth}`
+                },
+                body: JSON.stringify({})
+              });
+            }
+            await (nativeMatrixService as any).requireRoom(activeRoomId).sendRaw('m.call.hangup', JSON.stringify({
+              call_id: jitsiRoomId,
+              reason: 'user_hangup',
+              "org.eclo.jitsi_end": { conferenceId: jitsiRoomId, ts: Date.now() }
+            }));
+          } catch (e) {
+            console.error('Failed to end jitsi call', e);
+          }
+        }}
       />
     </View>
   );
@@ -1577,6 +1645,8 @@ function MessageContentView({
   onDownloadFile,
   onOpenMedia,
   onVote,
+  isJitsiCallEnded,
+  callDurationText,
 }: {
   colors: ReturnType<typeof useAppTheme>;
   isMine: boolean;
@@ -1585,6 +1655,8 @@ function MessageContentView({
   onDownloadFile?: (message: TimelineItem) => void;
   onOpenMedia?: (mediaId: string) => void;
   onVote?: (message: TimelineItem, answerId: string) => void;
+  isJitsiCallEnded?: boolean;
+  callDurationText?: string;
 }) {
   const textColor = isMine ? '#fff' : colors.text;
   if (message.messageKind === 'sticker') {
@@ -1695,6 +1767,58 @@ function MessageContentView({
       </View>
     );
   }
+  
+  let jitsiData = (message.raw as any)?.['org.eclo.jitsi'];
+  const bodyIncludesUrl = message.body?.includes('jitsi.5hpc.com/');
+  if (!jitsiData && bodyIncludesUrl) {
+    const match = message.body?.match(/jitsi\.5hpc\.com\/([a-zA-Z0-9_-]+)/);
+    if (match) {
+      jitsiData = { conferenceId: match[1], domain: 'jitsi.5hpc.com', type: message.body?.includes('video') ? 'video' : 'audio' };
+    }
+  }
+  
+  const isEndCallMessage = Boolean((message.raw as any)?.['org.eclo.jitsi_end']) || message.body?.includes('đã kết thúc');
+  const isJitsiCall = Boolean(jitsiData) || message.body?.includes('Cuộc gọi video nhóm') || message.body?.includes('Cuộc gọi thoại nhóm');
+  
+  if (isJitsiCall) {
+    const isVideo = jitsiData ? jitsiData.type !== 'audio' : message.body?.includes('video');
+    return (
+      <View style={{
+        flexDirection: 'row', 
+        alignItems: 'center', 
+        backgroundColor: colors.surface, 
+        padding: 12, 
+        borderRadius: 24,
+        marginVertical: 2,
+        minWidth: 260
+      }}>
+        <View style={{
+          width: 48, height: 48, borderRadius: 24, backgroundColor: isEndCallMessage ? '#fee2e2' : (isVideo ? '#dbeafe' : '#dcfce7'), 
+          alignItems: 'center', justifyContent: 'center', marginRight: 12
+        }}>
+          {isEndCallMessage ? <PhoneOff size={24} color="#ef4444" /> : (isVideo ? <Video size={24} color="#2563eb" fill="#2563eb" /> : <Mic size={24} color="#16a34a" fill="#16a34a" />)}
+        </View>
+        <View style={{flex: 1}}>
+          <Text style={{fontWeight: '600', fontSize: 16, color: colors.text}}>{isVideo ? 'Cuộc gọi video nhóm' : 'Cuộc gọi thoại nhóm'}</Text>
+          <Text style={{fontSize: 14, color: colors.secondaryText, marginTop: 2}}>
+            {(isJitsiCallEnded || isEndCallMessage) ? (callDurationText ? `Đã kết thúc • ${callDurationText}` : 'Đã kết thúc') : 'Đang diễn ra'}
+          </Text>
+        </View>
+        {!(isJitsiCallEnded || isEndCallMessage) && (
+          <View style={{
+            backgroundColor: '#3b82f6',
+            paddingHorizontal: 16,
+            paddingVertical: 8,
+            borderRadius: 20,
+            marginLeft: 8
+          }}>
+            <Text style={{color: '#fff', fontWeight: '600', fontSize: 14}}>Tham gia</Text>
+          </View>
+        )}
+      </View>
+    );
+  }
+
   return <FormattedMessageText colors={colors} isMine={isMine} message={message} />;
 }
 
@@ -1777,6 +1901,8 @@ function MediaPendingTile({colors, isMine, style}: {colors: ReturnType<typeof us
 function MessageActionOverlay({
   colors,
   message,
+  isJitsiCallEnded,
+  callDurationText,
   onClose,
   onForward,
   onPin,
@@ -1788,6 +1914,8 @@ function MessageActionOverlay({
 }: {
   colors: ReturnType<typeof useAppTheme>;
   message: TimelineItem | null;
+  isJitsiCallEnded?: boolean;
+  callDurationText?: string;
   onClose: () => void;
   onForward: () => void;
   onPin: () => void;
@@ -1830,7 +1958,7 @@ function MessageActionOverlay({
               styles.actionBubblePreview,
               isMine ? {backgroundColor: colors.bubbleMine, alignSelf: 'flex-end'} : {backgroundColor: colors.bubbleOther, borderColor: colors.bubbleOtherBorder, borderWidth: 1, alignSelf: 'flex-start'},
             ]}>
-            <MessageContentView message={message} isMine={isMine} colors={colors} />
+            <MessageContentView message={message} isMine={isMine} colors={colors} isJitsiCallEnded={isJitsiCallEnded} callDurationText={callDurationText} />
             <Text style={[styles.timestamp, themedText(colors, 10), {color: isMine ? 'rgba(255,255,255,0.66)' : colors.tertiaryText}]}>
               {new Date(message.timestamp).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}
             </Text>

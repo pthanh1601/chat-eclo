@@ -13,6 +13,7 @@ interface JitsiCallModalProps {
   avatarUrl?: string;
   onClose: () => void;
   onMinimizeToggle?: (minimized: boolean) => void;
+  onEndCall?: () => void;
 }
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -29,6 +30,7 @@ export function JitsiCallModal({
   avatarUrl,
   onClose,
   onMinimizeToggle,
+  onEndCall
 }: JitsiCallModalProps) {
   const [isMinimized, setIsMinimized] = useState(false);
   
@@ -102,6 +104,9 @@ export function JitsiCallModal({
   // Disable Deep Linking prompt to directly join on web
   hashParams.append('config.disableDeepLinking', 'true');
   
+  // Fix iOS WKWebView AudioContext crash on prejoin page
+  hashParams.append('config.disableAudioLevels', 'true');
+  
   // Hide Jitsi watermark logos via modern config overrides
   const emptySvg = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E";
   hashParams.append('config.customLogoUrl', `"${emptySvg}"`);
@@ -134,6 +139,24 @@ export function JitsiCallModal({
       var style = document.createElement('style');
       style.innerHTML = 'a[class*="watermark"], div[class*="watermark"], [class*="watermark"], [class*="logo"], .watermark, .leftwatermark, .rightwatermark, #defaultWatermark, .watermark-link, .header-logo, .prejoin-header .logo, .jitsi-logo { display: none !important; opacity: 0 !important; visibility: hidden !important; pointer-events: none !important; z-index: -9999 !important; }';
       document.head.appendChild(style);
+      
+      document.addEventListener('click', function(e) {
+        var el = e.target;
+        while (el && el !== document.body) {
+          var text = (el.innerText || '').trim().toLowerCase();
+          var isEndForAll = text.includes('end meeting for all') || text.includes('kết thúc cuộc họp với tất cả') || text.includes('kết thúc cuộc gọi với tất cả');
+          var isLeave = text === 'leave meeting' || text === 'rời khỏi cuộc họp' || text === 'rời phòng';
+          
+          if (isEndForAll) {
+             window.ReactNativeWebView.postMessage('terminated');
+             return;
+          } else if (isLeave && !isEndForAll) {
+             window.ReactNativeWebView.postMessage('hangup');
+             return;
+          }
+          el = el.parentNode;
+        }
+      }, true);
       
       // Secondary cleanup loop just in case
       setInterval(function() {
@@ -212,9 +235,17 @@ export function JitsiCallModal({
             mediaPlaybackRequiresUserAction={false}
             javaScriptEnabled={true}
             domStorageEnabled={true}
-            mediaCapturePermissionGrantType="grantIfSameHostElsePrompt"
+            mediaCapturePermissionGrantType="grant"
             onNavigationStateChange={handleNavigationStateChange}
             injectedJavaScript={injectedJS}
+            onMessage={(event) => {
+              if (event.nativeEvent.data === 'terminated') {
+                onEndCall?.();
+                onClose();
+              } else if (event.nativeEvent.data === 'hangup') {
+                onClose();
+              }
+            }}
           />
           {/* Overlay to block WebView from eating drag touches */}
           {isMinimized && (
