@@ -142,19 +142,31 @@ export function JitsiCallModal({
       
       document.addEventListener('click', function(e) {
         var el = e.target;
-        while (el && el !== document.body) {
-          var text = (el.innerText || '').trim().toLowerCase();
-          var isEndForAll = text.includes('end meeting for all') || text.includes('kết thúc cuộc họp với tất cả') || text.includes('kết thúc cuộc gọi với tất cả');
-          var isLeave = text === 'leave meeting' || text === 'rời khỏi cuộc họp' || text === 'rời phòng';
+        var btn = el.closest ? el.closest('[role="button"], button, .button, .toolbox-button') : null;
+        if (!btn) {
+           var parent = el.parentNode;
+           while (parent && parent !== document.body) {
+             if (parent.tagName === 'BUTTON' || parent.getAttribute('role') === 'button') {
+               btn = parent;
+               break;
+             }
+             parent = parent.parentNode;
+           }
+        }
+        
+        if (btn) {
+          var aria = (btn.getAttribute('aria-label') || '').toLowerCase();
+          var text = (btn.textContent || '').trim().toLowerCase();
+          var isEndForAll = aria.includes('end meeting for all') || text.includes('end meeting for all') || (text.includes('kết thúc') && text.includes('tất cả'));
+          var isLeave = aria.includes('leave meeting') || text.includes('leave meeting') || text.includes('rời khỏi') || text.includes('rời phòng') || text.includes('rời tạm thời');
           
           if (isEndForAll) {
              window.ReactNativeWebView.postMessage('terminated');
              return;
-          } else if (isLeave && !isEndForAll) {
+          } else if (isLeave) {
              window.ReactNativeWebView.postMessage('hangup');
              return;
           }
-          el = el.parentNode;
         }
       }, true);
       

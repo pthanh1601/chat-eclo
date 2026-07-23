@@ -487,6 +487,19 @@ export function ChatScreen({navigation, route}: Props) {
     }
   }, [route.params.jumpToEventId, timelineData.length]);
 
+  useEffect(() => {
+    if (activeJitsiWidget && showJitsiModal && timelineData.length) {
+      const confId = activeJitsiWidget.conferenceId;
+      const endMsg = timelineData.find(m => m.kind === 'message' && 
+        ((confId && (m.message.raw as any)?.['org.eclo.jitsi_end']?.conferenceId === confId))
+      );
+      if (endMsg) {
+        setShowJitsiModal(false);
+        setActiveJitsiWidget(null);
+      }
+    }
+  }, [timelineData, activeJitsiWidget, showJitsiModal]);
+
   async function ensureRoomForOutgoing(): Promise<string> {
     if (activeRoomId) {
       return activeRoomId;
@@ -1244,7 +1257,6 @@ export function ChatScreen({navigation, route}: Props) {
             } else {
               const endMsg = timelineData.find(m => m.kind === 'message' && (
                 (confId && (m.message.raw as any)?.['org.eclo.jitsi_end']?.conferenceId === confId) ||
-                (m.message.type === 'im.vector.modular.widgets' && m.message.timestamp > message.timestamp && Object.keys(m.message.raw || {}).length === 0) ||
                 (m.message.type === 'm.call.hangup' && m.message.timestamp > message.timestamp) ||
                 (m.message.timestamp > message.timestamp && m.message.body?.includes('đã kết thúc') && (m.message.body?.includes('Cuộc gọi thoại nhóm') || m.message.body?.includes('Cuộc gọi video nhóm') || m.message.body?.includes('Cuộc gọi đã kết thúc')))
               ));
