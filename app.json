@@ -7,7 +7,7 @@
     "userInterfaceStyle": "light",
     "ios": {
       "bundleIdentifier": "chatapp.5hpc.app",
-      "buildNumber": "1",
+      "buildNumber": "71",
       "entitlements": {
         "aps-environment": "production"
       },

@@ -91,6 +91,8 @@ export function ChatScreen({navigation, route}: Props) {
   const [jitsiToken, setJitsiToken] = useState<string>('');
   const [jitsiRoomId, setJitsiRoomId] = useState<string>('');
   const [jitsiAudioOnly, setJitsiAudioOnly] = useState<boolean>(false);
+  const [jitsiDisplayName, setJitsiDisplayName] = useState<string>('User');
+  const [jitsiAvatarUrl, setJitsiAvatarUrl] = useState<string>('');
   const [isJitsiMinimized, setIsJitsiMinimized] = useState(false);
   const [activeJitsiWidget, setActiveJitsiWidget] = useState<any>(null);
 
@@ -166,8 +168,18 @@ export function ChatScreen({navigation, route}: Props) {
       const domain = data.domain || 'jitsi.5hpc.com';
       const isAudioOnly = data.type === 'audio';
       const user = client ? client.getUser(ownUserId) : null;
-      const displayName = user?.displayName || (nativeMatrixService as any).currentUserDisplayName || 'User';
-      const avatarUrl = user?.avatarUrl ? client?.mxcUrlToHttp(user.avatarUrl) : (nativeMatrixService as any).currentUserAvatarUrl || '';
+      let displayName = user?.displayName || 'User';
+      let avatarUrl = user?.avatarUrl ? client?.mxcUrlToHttp(user.avatarUrl) : '';
+
+      if (usingNative) {
+        try {
+          const profile = await (nativeMatrixService as any).getOwnProfile();
+          if (profile.displayName) displayName = profile.displayName;
+          if (profile.avatarUrl) avatarUrl = profile.avatarUrl;
+        } catch (e) {
+          console.warn('Failed to get own profile', e);
+        }
+      }
 
       if (usingNative) {
         const auth = (nativeMatrixService as any).currentAccessToken;
@@ -191,6 +203,8 @@ export function ChatScreen({navigation, route}: Props) {
         setJitsiToken(jwtToken);
       }
 
+      setJitsiDisplayName(displayName);
+      setJitsiAvatarUrl(avatarUrl);
       setJitsiRoomId(confId);
       setJitsiAudioOnly(isAudioOnly);
       setShowJitsiModal(true);
@@ -488,8 +502,8 @@ export function ChatScreen({navigation, route}: Props) {
   }, [route.params.jumpToEventId, timelineData.length]);
 
   useEffect(() => {
-    if (activeJitsiWidget && showJitsiModal && timelineData.length) {
-      const confId = activeJitsiWidget.conferenceId;
+    if (showJitsiModal && jitsiRoomId && timelineData.length) {
+      const confId = jitsiRoomId;
       const endMsg = timelineData.find(m => m.kind === 'message' && 
         ((confId && (m.message.raw as any)?.['org.eclo.jitsi_end']?.conferenceId === confId))
       );
@@ -498,7 +512,7 @@ export function ChatScreen({navigation, route}: Props) {
         setActiveJitsiWidget(null);
       }
     }
-  }, [timelineData, activeJitsiWidget, showJitsiModal]);
+  }, [timelineData, jitsiRoomId, showJitsiModal]);
 
   async function ensureRoomForOutgoing(): Promise<string> {
     if (activeRoomId) {
@@ -1584,8 +1598,8 @@ export function ChatScreen({navigation, route}: Props) {
         onClose={() => setShowJitsiModal(false)}
         onMinimizeToggle={setIsJitsiMinimized}
         serverURL={'https://jitsi.5hpc.com'}
-        displayName={client?.getUser(ownUserId)?.displayName || (nativeMatrixService as any).currentUserDisplayName || 'User'}
-        avatarUrl={client?.mxcUrlToHttp(client?.getUser(ownUserId)?.avatarUrl || '') || (nativeMatrixService as any).currentUserAvatarUrl || ''}
+        displayName={jitsiDisplayName}
+        avatarUrl={jitsiAvatarUrl}
         onEndCall={async () => {
           try {
             const auth = (nativeMatrixService as any).currentAccessToken;

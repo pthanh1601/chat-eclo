@@ -36,6 +36,7 @@ export function JitsiCallModal({
   
   // Animation value for position when minimized
   const pan = useRef(new Animated.ValueXY({ x: SCREEN_WIDTH - PIP_WIDTH - 20, y: SCREEN_HEIGHT - PIP_HEIGHT - 100 })).current;
+  const webViewRef = useRef<WebView>(null);
   const _dummy = useRef(null); // Keeps the hook order identical to the cached version in Expo Go
 
   // Reset state when visibility changes
@@ -45,6 +46,24 @@ export function JitsiCallModal({
       onMinimizeToggle?.(false);
     }
   }, [visible]);
+
+  const handleClose = () => {
+    if (webViewRef.current) {
+      webViewRef.current.injectJavaScript(`
+        if (typeof APP !== 'undefined' && APP.conference) {
+          APP.conference.hangup();
+        } else {
+          window.dispatchEvent(new Event('unload'));
+        }
+        true;
+      `);
+      setTimeout(() => {
+        onClose();
+      }, 500);
+    } else {
+      onClose();
+    }
+  };
 
   useEffect(() => {
     onMinimizeToggle?.(isMinimized);
@@ -94,6 +113,8 @@ export function JitsiCallModal({
   // Inject user info into config
   if (displayName) hashParams.append('userInfo.displayName', `"${displayName}"`);
   if (avatarUrl) hashParams.append('userInfo.avatarURL', `"${avatarUrl}"`);
+  
+  hashParams.append('config.disableProfile', 'true');
   
   // Set audio only
   if (audioOnly) {
@@ -231,7 +252,7 @@ export function JitsiCallModal({
               style={[styles.pipCloseBtn, {position: 'relative', top: 0, right: 0, backgroundColor: '#d32f2f'}]} 
               onPress={(e) => {
                 e.stopPropagation();
-                onClose();
+                handleClose();
               }}
             >
               <X size={14} color="#fff" />
@@ -241,6 +262,7 @@ export function JitsiCallModal({
 
         <View style={{flex: 1}}>
           <WebView
+            ref={webViewRef}
             source={{ uri: url }}
             style={{ flex: 1, backgroundColor: '#000' }}
             allowsInlineMediaPlayback={true}
